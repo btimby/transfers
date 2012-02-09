@@ -7,7 +7,6 @@ import glob
 import fnmatch
 import shutil
 from .errors import ProtocolError
-from .io import SocketWrapper
 
 
 class Transfer(object):
@@ -101,9 +100,9 @@ class Transfer(object):
                             )
                             try:
                                 with file(name, 'r') as f:
-                                    s = SocketWrapper(self.client.transfercmd(command), 'w')
+                                    s, bytes = self.client.ntransfercmd(command)
                                     try:
-                                        shutil.copyfileobj(f, s)
+                                        shutil.copyfileobj(f, s.makefile('wb'))
                                     finally:
                                         s.close()
                                     self.client.voidresp()
@@ -150,7 +149,7 @@ class IterResponse(CommandResponse):
 class FilesResponse(IterResponse):
     def __init__(self, *args, **kwargs):
         super(FilesResponse, self).__init__(*args, **kwargs)
-        self.mode = 'r' if self.transfer.command == 'retr' else 'w'
+        self.mode = 'rb' if self.transfer.command == 'retr' else 'wb'
         self.current = 0
 
     def __iter__(self):
@@ -161,6 +160,8 @@ class FilesResponse(IterResponse):
                 self.transfer.path,
                 name
             )
-            yield SocketWrapper(client.transfercmd(command), self.mode)
+            s, size = client.ntransfercmd(command)
+            yield s.makefile(self.mode)
+            s.close()
             client.voidresp()
 
