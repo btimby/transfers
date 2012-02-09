@@ -1,13 +1,25 @@
 from .models import Transfer
-from .defaults import defaults
+
 
 class Session(object):
     """\
     An FTP session object that allows multiple FTP commands/transfers to occur using
     the same connection(s).
     """
-    def __init__(self, **kwargs):
-        pass
+    def __init__(self,
+        timeout=None,
+        auth=None,
+        verify=False,
+        passive=True,
+        ascii=False,
+        return_response=True,
+    ):
+        self.timeout = timeout or 30
+        self.auth = auth
+        self.verify = verify
+        self.passive = passive
+        self.ascii = ascii
+        self.return_response = return_response
 
     def __enter__(self):
         return self
@@ -15,60 +27,57 @@ class Session(object):
     def __exit__(self, *args):
         pass
 
-    def transfer(self, method, url,
-        timeout=None,
-        auth=None,
-        verify=None,
-        data=None,
-        files=None,
-        pasv=True,
-        ascii=False,
-        return_response=True,
+    def transfer(self, command, url,
+        # Allow overriding of session settings:
+        timeout = None,
+        auth = None,
+        verify = None,
+        passive = None,
+        ascii = None,
+        return_response = None,
+        # parameters for a transfer:
+        data = None,
+        files = None,
     ):
-        args = dict(
+        return_response = self.return_response if return_response is None else return_response
+        kwargs = dict(
+            data = data,
+            files = files,
+            # Params or session settings:
+            timeout = self.timeout if timeout is None else timeout,
+            auth = self.auth if auth is None else auth,
+            verify = self.verify if verify is None else verify,
+            passive = self.passive if passive is None else passive,
+            ascii = self.ascii if ascii is None else ascii,
         )
-        t = Transfer(**args)
+        t = Transfer(command, url, **kwargs)
         t.session = self
         if not return_response:
             return t
         t.send()
         return t.response
 
-    def get(url, **kwargs):
-        return self.transfer('RETR', url, **kwargs)
+    def get(self, url, **kwargs):
+        return self.transfer('retr', url, **kwargs)
 
-    def mget(url, **kwargs):
-        # Get glob from url
-        spec = urlo.path
-        for fname in glob.glob(spec):
-            url = ''
-            yield self.transfer('RETR', url, **kwargs)
+    def put(self, url, **kwargs):
+        return self.transfer('stor', url, **kwargs)
 
-    def put(url, **kwargs):
-        return self.transfer('STOR', url, **kwargs)
+    def mkdir(self, url, **kwargs):
+        return self.transfer('mkd', url, **kwargs)
 
-    def mput(url, **kwargs):
-        # Get glob from local path
-        spec = kwargs.pop('path')
-        for fname in glob.glob(spec):
-            url = ''
-            yield self.transfer('STOR', url, **kwargs)
-
-    def mkdir(url, **kwargs):
-        return self.transfer('MKD', url, **kwargs)
-
-    def delete(url, **kwargs):
+    def delete(self, url, **kwargs):
         # Determine type of file at url
-        return self.transfer('DELE', url, **kwargs)
+        return self.transfer('dele', url, **kwargs)
         # -- or --
-        return self.transfer('RMD', url, **kwargs)
+        return self.transfer('rmd', url, **kwargs)
 
-    def move(url, **kwargs):
-        self.transfer('RNFR', url, **kwargs)
-        self.transfer('RNTO', url, **kwargs)
+    def move(self, url, **kwargs):
+        self.transfer('rnfr', url, **kwargs)
+        self.transfer('rnto', url, **kwargs)
 
-    def list(url, **kwargs):
-        return self.transfer('LIST', url, **kwargs)
+    def list(self, url, **kwargs):
+        return self.transfer('nlst', url, **kwargs)
 
 
 def session(**kwargs):
