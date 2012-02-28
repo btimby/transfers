@@ -7,12 +7,12 @@ class Session(object):
     the same connection(s).
     """
     def __init__(self,
-        timeout=None,
-        auth=None,
-        verify=False,
-        passive=True,
-        ascii=False,
-        return_response=True,
+        timeout = None,
+        auth = None,
+        verify = False,
+        passive = True,
+        ascii = False,
+        return_response = True,
     ):
         self.timeout = timeout or 30
         self.auth = auth
@@ -58,26 +58,22 @@ class Session(object):
         return t.response
 
     def get(self, url, **kwargs):
-        return self.transfer('retr', url, **kwargs)
+        return self.transfer('get', url, **kwargs)
 
     def put(self, url, **kwargs):
-        return self.transfer('stor', url, **kwargs)
+        return self.transfer('put', url, **kwargs)
 
     def mkdir(self, url, **kwargs):
-        return self.transfer('mkd', url, **kwargs)
+        return self.transfer('create', url, **kwargs)
 
     def delete(self, url, **kwargs):
-        # Determine type of file at url
-        return self.transfer('dele', url, **kwargs)
-        # -- or --
-        return self.transfer('rmd', url, **kwargs)
+        return self.transfer('delete', url, **kwargs)
 
     def move(self, url, **kwargs):
-        self.transfer('rnfr', url, **kwargs)
-        self.transfer('rnto', url, **kwargs)
+        self.transfer('move', url, **kwargs)
 
     def list(self, url, **kwargs):
-        return self.transfer('nlst', url, **kwargs)
+        return self.transfer('list', url, **kwargs)
 
 
 def session(**kwargs):

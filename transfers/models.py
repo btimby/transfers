@@ -7,6 +7,14 @@ import glob
 import fnmatch
 import shutil
 from .errors import ProtocolError
+from .compat import StringIO
+try:
+    import paramiko
+except ImportError:
+    paramiko = None
+
+ANON_USER = 'anonymous'
+ANON_PASS = 'tr@nsfe.rs'
 
 
 class Transfer(object):
@@ -16,7 +24,7 @@ class Transfer(object):
             auth = None,
             verify = None,
             passive = None,
-            ascii = None,
+            ascii = False,
             return_response = None,
             # parameters for a transfer:
             data = None,
@@ -30,26 +38,25 @@ class Transfer(object):
         if urlp.scheme == 'ftps':
             if hasattr(ftplib, 'FTP_TLS'):
                 self.scheme = urlp.scheme
+        if urlp.scheme == 'sftp':
+            if paramiko:
+                self.scheme = urlp.scheme
         if self.scheme is None:
             raise ProtocolError('Unsupported protocol: {0}'.format(urlp.scheme))
-        pathspec = urlp.path or None
-        self.path = self.filter  = ''
+        pathspec = urlp.path or ''
+        pathspec = pathspec.split('/')
         self.filter = ''
-        for i, part in enumerate(pathspec.split('/')):
-            if not part:
-                continue
-            if '*' in part or '?' in part:
-                self.filter += part
-            else:
-                self.path += '/' + part
+        if '*' in pathspec[-1] or '?' in pathspec[-1]:
+            self.filter = pathspec.pop()
+        self.path = '/'.join(pathspec)
         self.scheme = urlp.scheme
         self.host = urlp.hostname
         self.port = urlp.port or 21
         self.timeout = timeout
-        if urlp.username and urlp.password:
+        if auth is None and (urlp.username and urlp.password):
             auth = (urlp.username, urlp.password)
-        if auth is None:
-            auth = ('anonymous', 'transfers@python.org')
+        elif auth is None:
+            auth = (ANON_USER, ANON_PASS)
         self.auth = auth
         self.verify = verify
         self.passive = passive
@@ -60,55 +67,29 @@ class Transfer(object):
         self.response = Response()
         self.client = ftplib.FTP() if self.scheme == 'ftp' else ftplib.FTP_TLS()
 
-    def _build_response(self, r):
-        if self.command == 'nlst':
-            self.response = IterResponse(self, r, self.filter)
-        if self.command == 'retr':
-            self.response = FilesResponse(self, r, self.filter)
-        if self.command == 'stor':
-            self.response = IterResponse(self, r, None)
-
     def send(self):
-        if self.verify:
-            pass
-        #self.client.set_debuglevel(2)
+        self.client.set_debuglevel(2)
         self.client.connect(self.host, self.port, self.timeout)
-        self.client.login(*self.auth)
+        if self.scheme == 'ftps':
+            self.client.auth()
+            self.client.prot_p()
+            if self.verify:
+                pass
+        if self.auth:
+            self.client.login(*self.auth)
         self.client.set_pasv(self.passive)
-        if self.ascii:
-            self.client.sendcmd('TYPE a')
-        else:
-            self.client.sendcmd('TYPE i')
         while True:
             try:
-                if self.command == 'nlst':
-                    r = self.client.nlst(self.path)
-                if self.command == 'retr':
-                    if self.filter:
-                        r = self.client.nlst(self.path)
-                    else:
-                        r = [os.path.basename(self.path)]
-                        self.path = os.path.dirname(self.path)
-                if self.command == 'stor':
-                    r = []
-                    for name in self.files:
-                        for name in glob.glob(name):
-                            command = '{0} {1}{2}'.format(
-                                self.command,
-                                self.path,
-                                name,
-                            )
-                            try:
-                                with file(name, 'r') as f:
-                                    s, bytes = self.client.ntransfercmd(command)
-                                    try:
-                                        shutil.copyfileobj(f, s.makefile('wb'))
-                                    finally:
-                                        s.close()
-                                    self.client.voidresp()
-                            except Exception, e:
-                                r.append(str(e))
-                self._build_response(r)
+                if self.command == 'list':
+                    self.response = IterResponse(self, self.list(self.path, self.filter))
+                elif self.command == 'get':
+                    self.response = GetResponse(self, self.get(self.path, self.filter))
+                elif self.command == 'put':
+                    self.response = IterResponse(self, self.put(self.path, self.files))
+                elif self.command == 'delete':
+                    self.response = IterResponse(self, self.delete(self.path, self.filter))
+                else:
+                    raise Exception('Invalid command {0}'.format(self.command))
                 break
             except ftplib.error_temp:
                 self.retry -= 1
@@ -118,6 +99,85 @@ class Transfer(object):
                 continue
         return True
 
+    def list(self, path, filter=None):
+        listing = self.client.nlst(self.path)
+        if filter:
+            listing = fnmatch.filter(listing, filter)
+        return listing
+
+    def get(self, path, filter=None):
+        if filter is None:
+            self.path = os.path.dirname(path)
+            return [os.path.basename(path)]
+        return self.list(path, filter)
+
+    def put(self, path, files):
+        results = []
+        def upload_file(s, name):
+            command = '{0} {1}{2}'.format(
+                'STOR',
+                self.path,
+                name,
+            )
+            d, bytes = self.client.ntransfercmd(command)
+            try:
+                try:
+                    shutil.copyfileobj(s, d.makefile('wb'))
+                finally:
+                    d.close()
+            finally:
+                s.close()
+            self.client.voidresp()
+        for f in files:
+            if isinstance(f, basestring):
+                # The file is a path or wildcard.
+                for name in glob.glob(f):
+                    try:
+                        with file(name, 'r') as f:
+                            upload_file(f, name)
+                            results.append((name, True))
+                    except Exception, e:
+                        results.append((name, str(e)))
+                continue
+            elif isinstance(f, tuple):
+                # The file is a tuple of (name, data)
+                try:
+                    name, f = f
+                except IndexError:
+                    raise TypeError('Tuples must have two elements (name, data), data should be a string or file-like object.')
+                if isinstance(f, basestring):
+                    # Data is a string, not a file-like object.
+                    f = StringIO(f)
+            elif hasattr(f, 'read'):
+                try:
+                    name = getattr(f, 'name')
+                except AttributeError:
+                    raise TypeError('File-like objects must have "name" attribute or be passed as a tuple (name, data).')
+            else:
+                raise TypeError('Files must be paths (with wildcards), tuples, or file-like objects with a name attribute.')
+            try:
+                upload_file(f, name)
+                results.append((name, True))
+            except Exception, e:
+                results.append((name, str(e)))
+        return results
+
+    def delete(self, path, filter=None):
+        listing, results = [], []
+        self.client.dir(path, listing.append)
+        for item in listing:
+            elem = item.split()
+            mode, name = elem[0], elem[-1]
+            try:
+                if mode.startswith('d'):
+                    results.extend(self.delete(name, '*'))
+                    self.client.rmd(name)
+                else:
+                    self.client.delete(name)
+                results.append((name, True))
+            except Exception, e:
+                results.append((name, str(e)))
+        return results
 
 class Response(object):
     pass
@@ -136,9 +196,7 @@ class CommandResponse(Response):
 
 
 class IterResponse(CommandResponse):
-    def __init__(self, transfer, returned, filter):
-        if filter:
-            returned = fnmatch.filter(returned, filter)
+    def __init__(self, transfer, returned):
         super(IterResponse, self).__init__(transfer, returned)
 
     def __iter__(self):
@@ -146,9 +204,9 @@ class IterResponse(CommandResponse):
             yield item
 
 
-class FilesResponse(IterResponse):
+class GetResponse(IterResponse):
     def __init__(self, *args, **kwargs):
-        super(FilesResponse, self).__init__(*args, **kwargs)
+        super(GetResponse, self).__init__(*args, **kwargs)
         self.mode = 'rb' if self.transfer.command == 'retr' else 'wb'
         self.current = 0
 
@@ -156,12 +214,16 @@ class FilesResponse(IterResponse):
         client = self.transfer.client
         for name in self.returned:
             command = '{0} {1}{2}'.format(
-                self.transfer.command,
+                'RETR',
                 self.transfer.path,
                 name
             )
+            if self.transfer.ascii:
+                client.voidcmd('TYPE A')
+            else:
+                client.voidcmd('TYPE I')
             s, size = client.ntransfercmd(command)
-            yield s.makefile(self.mode)
+            yield name, s.makefile(self.mode)
             s.close()
             client.voidresp()
 
