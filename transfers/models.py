@@ -45,9 +45,7 @@ class Transfer(object):
             raise ProtocolError('Unsupported protocol: {0}'.format(urlp.scheme))
         pathspec = urlp.path or ''
         pathspec = pathspec.split('/')
-        self.filter = ''
-        if '*' in pathspec[-1] or '?' in pathspec[-1]:
-            self.filter = pathspec.pop()
+        self.filter = pathspec.pop()
         self.path = '/'.join(pathspec)
         self.scheme = urlp.scheme
         self.host = urlp.hostname
@@ -68,7 +66,7 @@ class Transfer(object):
         self.client = ftplib.FTP() if self.scheme == 'ftp' else ftplib.FTP_TLS()
 
     def send(self):
-        self.client.set_debuglevel(2)
+        #self.client.set_debuglevel(2)
         self.client.connect(self.host, self.port, self.timeout)
         if self.scheme == 'ftps':
             self.client.auth()
@@ -99,16 +97,13 @@ class Transfer(object):
                 continue
         return True
 
-    def list(self, path, filter=None):
-        listing = self.client.nlst(self.path)
+    def list(self, path, filter):
+        listing = self.client.nlst(path)
         if filter:
             listing = fnmatch.filter(listing, filter)
         return listing
 
-    def get(self, path, filter=None):
-        if filter is None:
-            self.path = os.path.dirname(path)
-            return [os.path.basename(path)]
+    def get(self, path, filter):
         return self.list(path, filter)
 
     def put(self, path, files):
@@ -117,7 +112,7 @@ class Transfer(object):
             command = '{0} {1}{2}'.format(
                 'STOR',
                 self.path,
-                name,
+                os.path.basename(name),
             )
             d, bytes = self.client.ntransfercmd(command)
             try:
@@ -162,18 +157,20 @@ class Transfer(object):
                 results.append((name, str(e)))
         return results
 
-    def delete(self, path, filter=None):
+    def delete(self, path, filter):
         listing, results = [], []
         self.client.dir(path, listing.append)
         for item in listing:
             elem = item.split()
             mode, name = elem[0], elem[-1]
+            if not fnmatch.fnmatch(name, filter):
+                continue
             try:
                 if mode.startswith('d'):
                     results.extend(self.delete(name, '*'))
                     self.client.rmd(name)
                 else:
-                    self.client.delete(name)
+                    self.client.delete(os.path.join(path, name))
                 results.append((name, True))
             except Exception, e:
                 results.append((name, str(e)))

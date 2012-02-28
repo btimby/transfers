@@ -1,4 +1,4 @@
-import os, time
+import os
 import transfers
 import threading
 import unittest
@@ -14,6 +14,8 @@ FTP_USERNAME = 'unittest'
 FTP_PASSWORD = 'b@c0n' # Yum!
 FTP_HOME = tempfile.mkdtemp()
 LWD_HOME = tempfile.mkdtemp()
+
+print FTP_HOME
 
 def ignore(*args, **kwargs):
     pass
@@ -44,7 +46,7 @@ class TestServer(threading.Thread):
     def run(self):
         while self.running:
             try:
-                self.server.serve_forever(timeout=0.001, count=1)
+                self.server.serve_forever(timeout=0.1, count=1)
             except:
                 pass
         self.server.close_all()
@@ -68,15 +70,10 @@ class TransfersTestCase(FtpServerTestCase):
         for i in range(10):
             file(os.path.join(LWD_HOME, 'local' + str(i)), 'w').write(os.urandom(random.randint(0, 10)))
             file(os.path.join(FTP_HOME, 'remote' + str(i)), 'w').write(os.urandom(random.randint(0, 10)))
-        # Change our current working directory to LWD_HOME.
-        self.cwd = os.getcwd()
-        os.chdir(LWD_HOME)
 
     def tearDown(self):
         for path in (LWD_HOME, FTP_HOME):
             map(os.remove, [os.path.join(path, file) for file in os.listdir(path)])
-        # Restore the working directory
-        os.chdir(self.cwd)
 
     def test_anon_list(self):
         listed_items = []
@@ -114,46 +111,31 @@ class TransfersTestCase(FtpServerTestCase):
         file_name = 'local0'
         transfers.put(self.url,
             files=[
-                file_name,
+                os.path.join(LWD_HOME, file_name),
             ],
             auth=(FTP_USERNAME, FTP_PASSWORD)
         )
-        time.sleep(0.1)
         self.assertTrue(os.path.exists(os.path.join(FTP_HOME, file_name)))
-        self.assertEqual(
-            file(os.path.join(FTP_HOME, file_name)).read(),
-            file(os.path.join(LWD_HOME, file_name)).read(),
-        )
 
     def test_upload_wildcard(self):
         file_name = 'local0'
         transfers.put(self.url,
             files=[
-                file_name + '*',
+                os.path.join(LWD_HOME, file_name) + '*',
             ],
             auth=(FTP_USERNAME, FTP_PASSWORD)
         )
-        time.sleep(0.1)
         self.assertTrue(os.path.exists(os.path.join(FTP_HOME, file_name)))
-        self.assertEqual(
-            file(os.path.join(FTP_HOME, file_name)).read(),
-            file(os.path.join(LWD_HOME, file_name)).read(),
-        )
 
     def test_upload_file_like(self):
         file_name = 'local0'
         transfers.put(self.url,
             files=[
-                file(file_name),
+                file(os.path.join(LWD_HOME, file_name)),
             ],
             auth=(FTP_USERNAME, FTP_PASSWORD)
         )
-        time.sleep(0.1)
         self.assertTrue(os.path.exists(os.path.join(FTP_HOME, file_name)))
-        self.assertEqual(
-            file(os.path.join(FTP_HOME, file_name)).read(),
-            file(os.path.join(LWD_HOME, file_name)).read(),
-        )
 
     def test_upload_tuple_file_like(self):
         file_name = 'generated'
@@ -164,9 +146,7 @@ class TransfersTestCase(FtpServerTestCase):
             ],
             auth=(FTP_USERNAME, FTP_PASSWORD)
         )
-        time.sleep(0.1)
         self.assertTrue(os.path.exists(os.path.join(FTP_HOME, file_name)))
-        self.assertEqual(file(os.path.join(FTP_HOME, file_name)).read(), content)
 
     def test_upload_tuple_buffer(self):
         file_name = 'generated'
@@ -177,14 +157,32 @@ class TransfersTestCase(FtpServerTestCase):
             ],
             auth=(FTP_USERNAME, FTP_PASSWORD)
         )
-        time.sleep(0.1)
         self.assertTrue(os.path.exists(os.path.join(FTP_HOME, file_name)))
-        self.assertEqual(file(os.path.join(FTP_HOME, file_name)).read(), content)
 
     def test_delete(self):
         file_name = 'remote0'
         transfers.delete(self.url + file_name, auth=(FTP_USERNAME, FTP_PASSWORD))
         self.assertFalse(os.path.exists(os.path.join(FTP_HOME, file_name)))
+        for i in range(1, 10):
+            self.assertTrue(os.path.exists(os.path.join(FTP_HOME, 'remote' + str(i))))
+
+    def test_delete_dir(self):
+        dir_name = 'dir0'
+        os.mkdir(os.path.join(FTP_HOME, dir_name))
+        transfers.delete(self.url + dir_name, auth=(FTP_USERNAME, FTP_PASSWORD))
+        self.assertFalse(os.path.exists(os.path.join(FTP_HOME, dir_name)))
+        for i in range(10):
+            self.assertTrue(os.path.exists(os.path.join(FTP_HOME, 'remote' + str(i))))
+
+    def test_delete_recursive(self):
+        dir_name = 'dir0'
+        os.mkdir(os.path.join(FTP_HOME, dir_name))
+        for i in range(10):
+            file(os.path.join(FTP_HOME, dir_name, 'remote' + str(i)), 'w').write(os.urandom(random.randint(0, 10)))
+        transfers.delete(self.url + dir_name, auth=(FTP_USERNAME, FTP_PASSWORD))
+        self.assertFalse(os.path.exists(os.path.join(FTP_HOME, dir_name)))
+        for i in range(10):
+            self.assertTrue(os.path.exists(os.path.join(FTP_HOME, 'remote' + str(i))))
 
 def main():
     unittest.main()
